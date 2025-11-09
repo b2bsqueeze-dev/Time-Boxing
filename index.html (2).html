@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TimeBox Planner — With Daily Export</title>
+
+  <!-- React / ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg-primary: #ffffff; --bg-secondary: #f5f5f5; --bg-tertiary: #e8e8e8;
+      --text-primary: #1a1a1a; --text-secondary: #666666; --border-color: #d1d1d1;
+      --accent-color: #4a90e2; --accent-hover: #357abd; --checkbox-bg: #ffffff;
+      --sticky-bg: #fff8dc; --shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    [data-theme="dark"] {
+      --bg-primary: #1a1a1a; --bg-secondary: #2d2d2d; --bg-tertiary: #3a3a3a;
+      --text-primary: #e0e0e0; --text-secondary: #a0a0a0; --border-color: #4a4a4a;
+      --accent-color: #5ba3f5; --accent-hover: #4a90e2; --checkbox-bg: #2d2d2d;
+      --sticky-bg: #3d3520;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-secondary); color: var(--text-primary); line-height: 1.6;
+      transition: background-color .2s, color .2s;
+    }
+    .app-container { max-width: 1100px; margin: 20px auto; padding: 18px; }
+    .top-bar { background: var(--bg-primary); padding: 18px 22px; border-radius: 10px;
+               display:flex; align-items:center; justify-content:space-between; gap:12px;
+               box-shadow:var(--shadow); flex-wrap:wrap; }
+    .top-bar h1 { font-size:1.6rem; color:var(--accent-color); }
+    .top-bar-controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .date-selector { padding:8px 12px; border-radius:8px; border:2px solid var(--border-color);
+                     background:var(--bg-secondary); color:var(--text-primary); }
+    .theme-toggle { background:var(--accent-color); color:white; border:none; padding:8px 12px;
+                    border-radius:8px; cursor:pointer; font-size:1rem; }
+    .export-btn { background:#007bff; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    .export-all-btn { background:#6c757d; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    .content-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:20px; }
+    .section { background:var(--bg-primary); padding:18px; border-radius:10px; box-shadow:var(--shadow); }
+    .section-title { font-size:1.15rem; color:var(--accent-color); margin-bottom:12px; font-weight:600; }
+    .priority-item { display:flex; gap:10px; align-items:center; margin-bottom:12px; }
+    .priority-input, .activity-input, .braindump-area { font-size:0.95rem; }
+    .priority-input { flex:1; padding:10px; border-radius:8px; border:1.5px solid var(--border-color);
+                       background:var(--bg-secondary); color:var(--text-primary); }
+    .braindump-area { width:100%; min-height:160px; padding:12px; border-radius:10px;
+                      border:2px dashed var(--border-color); background:var(--sticky-bg); resize:vertical; }
+    .timebox-section { margin-top:20px; background:var(--bg-primary); padding:18px; border-radius:10px; box-shadow:var(--shadow); }
+    .timebox-header, .timebox-row { display:grid; grid-template-columns:120px 1fr 70px; gap:12px; align-items:center; }
+    .timebox-header { padding-bottom:10px; border-bottom:2px solid var(--border-color); color:var(--accent-color); font-weight:600; }
+    .timebox-list { max-height:520px; overflow:auto; margin-top:10px; padding-right:6px; }
+    .timebox-row { padding:8px 0; border-bottom:1px solid var(--border-color); }
+    .timebox-row.current-time { background: linear-gradient(90deg, rgba(74,144,226,0.12), rgba(74,144,226,0.03)); border-left:4px solid var(--accent-color); padding-left:8px; }
+    .time-label { color:var(--text-secondary); font-weight:500; }
+    .activity-input { padding:8px; border-radius:8px; border:1px solid var(--border-color); background:var(--checkbox-bg); }
+    .completion-checkbox { width:20px; height:20px; }
+    .save-indicator { position:fixed; right:24px; bottom:24px; background:#28a745; color:white; padding:10px 14px; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.15); z-index:1000; }
+    @media (max-width:960px) { .content-grid { grid-template-columns:1fr; } .timebox-header, .timebox-row { grid-template-columns:100px 1fr 60px; } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function TimeBoxPlanner() {
+      // Theme
+      const [theme, setTheme] = useState('light');
+
+      // Date selection (ISO)
+      const todayIso = new Date().toISOString().split('T')[0];
+      const [selectedDate, setSelectedDate] = useState(todayIso);
+
+      // Priorities
+      const [priorities, setPriorities] = useState([
+        { id: 1, text: '', completed: false },
+        { id: 2, text: '', completed: false },
+        { id: 3, text: '', completed: false }
+      ]);
+
+      // Braindump
+      const [braindump, setBraindump] = useState('');
+
+      // Timeboxes generator (30-min slots from 03:00 to 23:30)
+      const generateSlots = () => {
+        const slots = [];
+        const start = new Date();
+        start.setHours(3, 0, 0, 0);
+        const end = new Date();
+        end.setHours(23, 30, 0, 0);
+
+        for (let t = new Date(start); t <= end; t.setMinutes(t.getMinutes() + 30)) {
+          const hh = t.getHours();
+          const mm = t.getMinutes();
+          const id = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`; // use start time as id
+          const period = hh >= 12 ? 'PM' : 'AM';
+          const displayHour = hh % 12 === 0 ? 12 : hh % 12;
+          const displayTime = `${String(displayHour).padStart(2,'0')}:${String(mm).padStart(2,'0')} ${period}`;
+          slots.push({ id, time: displayTime, activity: '', completed: false });
+        }
+        return slots;
+      };
+
+      const [timeboxes, setTimeboxes] = useState(() => generateSlots());
+
+      // Current time for highlighting
+      const [currentTime, setCurrentTime] = useState(new Date());
+
+      // Save indicator
+      const [showSaveIndicator, setShowSaveIndicator] = useState(false);
+
+      // refs for load/save handling
+      const isLoadingRef = useRef(true);
+      const saveDebounceRef = useRef(null);
+      const indicatorTimeoutRef = useRef(null);
+
+      // Pomodoro (kept basic)
+      const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
+      const [isRunning, setIsRunning] = useState(false);
+      const [isPaused, setIsPaused] = useState(false);
+      const [pomodoroStatus, setPomodoroStatus] = useState('Work Session');
+      const timerRef = useRef(null);
+
+      // --- Theme persistence ---
+      useEffect(() => {
+        const saved = localStorage.getItem('theme') || 'light';
+        setTheme(saved);
+        document.documentElement.setAttribute('data-theme', saved);
+      }, []);
+
+      const toggleTheme = () => {
+        const next = theme === 'light' ? 'dark' : 'light';
+        setTheme(next);
+        localStorage.setItem('theme', next);
+        document.documentElement.setAttribute('data-theme', next);
+      };
+
+      // --- Update current time periodically (15s) ---
+      useEffect(() => {
+        const t = setInterval(() => setCurrentTime(new Date()), 15000);
+        return () => clearInterval(t);
+      }, []);
+
+      // --- Load saved data for selected date ---
+      useEffect(() => {
+        isLoadingRef.current = true;
+        try {
+          const key = `timeboxData_${selectedDate}`;
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            setPriorities(parsed.priorities ?? [
+              { id: 1, text: '', completed: false },
+              { id: 2, text: '', completed: false },
+              { id: 3, text: '', completed: false }
+            ]);
+            setBraindump(parsed.braindump ?? '');
+            if (Array.isArray(parsed.timeboxes) && parsed.timeboxes.length) {
+              const gen = generateSlots();
+              const merged = gen.map(g => {
+                const found = parsed.timeboxes.find(t => t.id === g.id);
+                return found ? { ...g, activity: found.activity ?? '', completed: found.completed ?? false } : g;
+              });
+              setTimeboxes(merged);
+            } else {
+              setTimeboxes(generateSlots());
+            }
+          } else {
+            setTimeboxes(generateSlots());
+            setBraindump('');
+            setPriorities(prev => prev); // keep default priorities
+          }
+        } catch (err) {
+          console.error('Failed to load saved data', err);
+          setTimeboxes(generateSlots());
+        } finally {
+          // small delay to avoid immediate save overriding loaded values
+          setTimeout(() => { isLoadingRef.current = false; }, 0);
+        }
+      }, [selectedDate]);
+
+      // --- Save to localStorage with debounce ---
+      useEffect(() => {
+        if (isLoadingRef.current) return;
+
+        if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+        saveDebounceRef.current = setTimeout(() => {
+          try {
+            const key = `timeboxData_${selectedDate}`;
+            const payload = { priorities, braindump, timeboxes };
+            localStorage.setItem(key, JSON.stringify(payload));
+            setShowSaveIndicator(true);
+            if (indicatorTimeoutRef.current) clearTimeout(indicatorTimeoutRef.current);
+            indicatorTimeoutRef.current = setTimeout(() => setShowSaveIndicator(false), 1400);
+          } catch (err) {
+            console.error('Save failed', err);
+          }
+        }, 450);
+
+        return () => {
+          if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+        };
+      }, [priorities, braindump, timeboxes, selectedDate]);
+
+      // --- Update helpers ---
+      const updatePriority = (id, field, value) => setPriorities(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
+      const updateTimebox = (id, field, value) => setTimeboxes(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
+
+      // --- Highlight current slot ---
+      const isCurrentTimeSlot = (timeboxId) => {
+        if (selectedDate !== todayIso) return false;
+        const [hh, mm] = timeboxId.split(':').map(Number);
+        const now = currentTime;
+        const slotStart = new Date(now);
+        slotStart.setHours(hh, mm, 0, 0);
+        const slotEnd = new Date(slotStart);
+        slotEnd.setMinutes(slotEnd.getMinutes() + 30);
+        return now >= slotStart && now < slotEnd;
+      };
+
+      // --- Pomodoro logic (safe) ---
+      useEffect(() => {
+        if (isRunning && !isPaused) {
+          timerRef.current = setInterval(() => {
+            setPomodoroTime(prev => {
+              if (prev <= 1) {
+                clearInterval(timerRef.current);
+                setIsRunning(false);
+                setIsPaused(false);
+                if ('Notification' in window && Notification.permission === 'granted') {
+                  try { new Notification('Pomodoro Complete!', { body: `${pomodoroStatus} finished!` }); } catch (e) {}
+                }
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+        } else {
+          clearInterval(timerRef.current);
+        }
+        return () => clearInterval(timerRef.current);
+      }, [isRunning, isPaused, pomodoroStatus]);
+
+      useEffect(() => {
+        if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission().catch(() => {});
+        }
+      }, []);
+
+      const startPomodoro = () => { setIsRunning(true); setIsPaused(false); };
+      const pausePomodoro = () => { setIsPaused(p => !p); };
+      const resetPomodoro = () => { setIsRunning(false); setIsPaused(false); setPomodoroTime(25*60); setPomodoroStatus('Work Session'); };
+      const setPreset = (minutes, status) => { if (!isRunning) { setPomodoroTime(minutes * 60); setPomodoroStatus(status); } };
+      const formatTime = (secs) => { const m = Math.floor(secs/60); const s = secs%60; return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; };
+
+      // --- Export functions: export selected date file and export all saved days ---
+      const exportSelectedDate = () => {
+        try {
+          const key = `timeboxData_${selectedDate}`;
+          // Build payload from current state (ensure latest edits)
+          const payload = { date: selectedDate, priorities, braindump, timeboxes };
+          const json = JSON.stringify(payload, null, 2);
+          const blob = new Blob([json], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `timebox_${selectedDate}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error('Export failed', err);
+          alert('Export failed — check console for details.');
+        }
+      };
+
+      const exportAllSaved = () => {
+        try {
+          const all = {};
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('timeboxData_')) {
+              try {
+                all[key.replace('timeboxData_', '')] = JSON.parse(localStorage.getItem(key));
+              } catch (e) {
+                // parse error — still include raw string
+                all[key.replace('timeboxData_', '')] = localStorage.getItem(key);
+              }
+            }
+          }
+          const json = JSON.stringify(all, null, 2);
+          const blob = new Blob([json], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `timebox_all_saved.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error('Export all failed', err);
+          alert('Export all failed — check console for details.');
+        }
+      };
+
+      // Cleanup on unmount
+      useEffect(() => {
+        return () => {
+          if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+          if (indicatorTimeoutRef.current) clearTimeout(indicatorTimeoutRef.current);
+          clearInterval(timerRef.current);
+        };
+      }, []);
+
+      return (
+        <div className="app-container" role="application" aria-label="TimeBox Planner">
+          <div className="top-bar">
+            <h1>⏰ TimeBox Planner</h1>
+            <div className="top-bar-controls">
+              <input
+                aria-label="Select date"
+                title="Select date"
+                className="date-selector"
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
+
+              <button
+                aria-label="Export selected day's data to JSON"
+                title="Export selected date"
+                className="export-btn"
+                onClick={exportSelectedDate}
+              >
+                Export Day
+              </button>
+
+              <button
+                aria-label="Export all saved days to JSON"
+                title="Export all saved data"
+                className="export-all-btn"
+                onClick={exportAllSaved}
+              >
+                Export All
+              </button>
+
+              <button
+                aria-pressed={theme === 'dark'}
+                aria-label="Toggle theme"
+                className="theme-toggle"
+                onClick={toggleTheme}
+                title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+              >
+                {theme === 'light' ? '🌙' : '☀️'}
+              </button>
+            </div>
+          </div>
+
+          <div className="content-grid">
+            <section className="section" aria-labelledby="priorities-title">
+              <h2 id="priorities-title" className="section-title">📌 Daily Priority Top 3</h2>
+              {priorities.map((p, i) => (
+                <div key={p.id} className="priority-item">
+                  <input
+                    aria-label={`Mark priority ${i+1} complete`}
+                    type="checkbox"
+                    className="priority-checkbox"
+                    checked={p.completed}
+                    onChange={(e) => updatePriority(p.id, 'completed', e.target.checked)}
+                  />
+                  <input
+                    aria-label={`Priority ${i+1} text`}
+                    className={`priority-input ${p.completed ? 'completed' : ''}`}
+                    placeholder={`Priority ${i + 1}`}
+                    value={p.text}
+                    onChange={(e) => updatePriority(p.id, 'text', e.target.value)}
+                  />
+                </div>
+              ))}
+            </section>
+
+            <section className="section" aria-labelledby="braindump-title">
+              <h2 id="braindump-title" className="section-title">📝 Braindump</h2>
+              <textarea
+                aria-label="Braindump area"
+                className="braindump-area"
+                placeholder="Dump all your thoughts, ideas, and todos here..."
+                value={braindump}
+                onChange={(e) => setBraindump(e.target.value)}
+              />
+            </section>
+          </div>
+
+          <section className="timebox-section" aria-labelledby="schedule-title">
+            <h2 id="schedule-title" className="section-title">🕒 Today's Schedule</h2>
+            <div className="timebox-header" role="presentation">
+              <div>Start Time</div>
+              <div>Activity</div>
+              <div style={{ textAlign: 'center' }}>Done</div>
+            </div>
+
+            <div className="timebox-list" role="list" aria-label="Time slots list">
+              {timeboxes.map(tb => {
+                const current = isCurrentTimeSlot(tb.id);
+                return (
+                  <div
+                    role="listitem"
+                    key={tb.id}
+                    className={`timebox-row ${current ? 'current-time' : ''}`}
+                    aria-current={current ? 'true' : 'false'}
+                  >
+                    <div className="time-label">{tb.time}</div>
+                    <input
+                      aria-label={`Activity at ${tb.time}`}
+                      className={`activity-input ${tb.completed ? 'completed' : ''}`}
+                      value={tb.activity}
+                      placeholder="Enter activity..."
+                      onChange={(e) => updateTimebox(tb.id, 'activity', e.target.value)}
+                    />
+                    <div style={{ textAlign: 'center' }}>
+                      <input
+                        aria-label={`Mark ${tb.time} as done`}
+                        className="completion-checkbox"
+                        type="checkbox"
+                        checked={tb.completed}
+                        onChange={(e) => updateTimebox(tb.id, 'completed', e.target.checked)}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Pomodoro */}
+          <section className="section" style={{ marginTop: 18 }} aria-labelledby="pomodoro-title">
+            <h2 id="pomodoro-title" className="section-title">🍅 Pomodoro</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+              <div style={{ fontFamily: "'Courier New', monospace", fontSize: '2rem', color: 'var(--accent-color)' }}>
+                {formatTime(pomodoroTime)}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="theme-toggle" onClick={startPomodoro} aria-label="Start Pomodoro">Start</button>
+                <button className="theme-toggle" onClick={pausePomodoro} aria-label="Pause Pomodoro">{isPaused ? 'Resume' : 'Pause'}</button>
+                <button className="theme-toggle" onClick={resetPomodoro} aria-label="Reset Pomodoro">Reset</button>
+              </div>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display:'flex', gap:8, marginTop:8 }}>
+                <button className="priority-input" onClick={() => setPreset(25, 'Work Session')}>25⏱</button>
+                <button className="priority-input" onClick={() => setPreset(5, 'Short Break')}>5⏱</button>
+                <button className="priority-input" onClick={() => setPreset(15, 'Long Break')}>15⏱</button>
+              </div>
+              <div style={{ marginTop:8, color:'var(--text-secondary)' }}>{pomodoroStatus}</div>
+            </div>
+          </section>
+
+          {showSaveIndicator && <div className="save-indicator" role="status">Saved</div>}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<TimeBoxPlanner />);
+  </script>
+</body>
+</html>
