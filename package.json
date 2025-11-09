@@ -1,0 +1,25 @@
+{
+  "name": "timebox-planner-server",
+  "version": "1.0.0",
+  "description": "TimeBox Planner with small server-side persistence",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "timebox",
+    "planner",
+    "express"
+  ],
+  "author": "auto-generated",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}

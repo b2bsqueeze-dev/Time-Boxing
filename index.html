@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TimeBox Planner — With Server</title>
+
+  <!-- React / ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* same styles as your original app (kept concise here) */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg-primary: #ffffff; --bg-secondary: #f5f5f5; --bg-tertiary: #e8e8e8;
+      --text-primary: #1a1a1a; --text-secondary: #666666; --border-color: #d1d1d1;
+      --accent-color: #4a90e2;
+    }
+    [data-theme="dark"] {
+      --bg-primary: #1a1a1a; --bg-secondary: #2d2d2d; --text-primary: #e0e0e0;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg-secondary); color: var(--text-primary); }
+    .app-container { max-width: 1100px; margin: 20px auto; padding: 18px; }
+    .top-bar { background: var(--bg-primary); padding: 18px 22px; border-radius: 10px; display:flex; align-items:center; justify-content:space-between; gap:12px; box-shadow:0 2px 8px rgba(0,0,0,0.08); flex-wrap:wrap; }
+    .top-bar h1 { font-size:1.6rem; color:var(--accent-color); }
+    .top-bar-controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .date-selector { padding:8px 12px; border-radius:8px; border:2px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); }
+    .theme-toggle { background:var(--accent-color); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-size:1rem; }
+    .content-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:20px; }
+    .section { background:var(--bg-primary); padding:18px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+    .section-title { font-size:1.15rem; color:var(--accent-color); margin-bottom:12px; font-weight:600; }
+    .braindump-area { width:100%; min-height:160px; padding:12px; border-radius:10px; border:2px dashed var(--border-color); resize:vertical; }
+    .timebox-section { margin-top:20px; background:var(--bg-primary); padding:18px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+    .timebox-list { max-height:520px; overflow:auto; margin-top:10px; padding-right:6px; }
+    .timebox-row { display:grid; grid-template-columns:120px 1fr 70px; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid var(--border-color); }
+    .activity-input { padding:8px; border-radius:8px; border:1px solid var(--border-color); background:#fff; }
+    .save-indicator { position:fixed; right:24px; bottom:24px; background:#28a745; color:white; padding:10px 14px; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.15); z-index:1000; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function TimeBoxPlanner() {
+      const todayIso = new Date().toISOString().split('T')[0];
+      const [selectedDate, setSelectedDate] = useState(todayIso);
+      const [priorities, setPriorities] = useState([
+        { id: 1, text: '', completed: false },
+        { id: 2, text: '', completed: false },
+        { id: 3, text: '', completed: false }
+      ]);
+      const [braindump, setBraindump] = useState('');
+      const [timeboxes, setTimeboxes] = useState(() => generateSlots());
+      const [showSaveIndicator, setShowSaveIndicator] = useState(false);
+      const isLoadingRef = useRef(true);
+      const saveDebounceRef = useRef(null);
+      const indicatorTimeoutRef = useRef(null);
+
+      // Generate slots
+      function generateSlots() {
+        const slots = [];
+        const start = new Date();
+        start.setHours(3, 0, 0, 0);
+        const end = new Date();
+        end.setHours(23, 30, 0, 0);
+        for (let t = new Date(start); t <= end; t.setMinutes(t.getMinutes() + 30)) {
+          const hh = t.getHours();
+          const mm = t.getMinutes();
+          const id = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+          const period = hh >= 12 ? 'PM' : 'AM';
+          const displayHour = hh % 12 === 0 ? 12 : hh % 12;
+          const displayTime = `${String(displayHour).padStart(2,'0')}:${String(mm).padStart(2,'0')} ${period}`;
+          slots.push({ id, time: displayTime, activity: '', completed: false });
+        }
+        return slots;
+      }
+
+      // Load data from server (fallback to localStorage if server fails)
+      useEffect(() => {
+        isLoadingRef.current = true;
+        (async () => {
+          try {
+            const res = await fetch(`/api/data/${selectedDate}`);
+            if (res.ok) {
+              const parsed = await res.json();
+              setPriorities(parsed.priorities ?? [
+                { id: 1, text: '', completed: false },
+                { id: 2, text: '', completed: false },
+                { id: 3, text: '', completed: false }
+              ]);
+              setBraindump(parsed.braindump ?? '');
+              if (Array.isArray(parsed.timeboxes) && parsed.timeboxes.length) {
+                const gen = generateSlots();
+                const merged = gen.map(g => {
+                  const found = parsed.timeboxes.find(t => t.id === g.id);
+                  return found ? { ...g, activity: found.activity ?? '', completed: found.completed ?? false } : g;
+                });
+                setTimeboxes(merged);
+              } else {
+                setTimeboxes(generateSlots());
+              }
+              // Also save a local copy for offline fallback
+              try { localStorage.setItem(`timeboxData_${selectedDate}`, JSON.stringify({ priorities, braindump, timeboxes })); } catch(e){}
+            } else {
+              // server returned 404 or other -> fallback to localStorage
+              const saved = localStorage.getItem(`timeboxData_${selectedDate}`);
+              if (saved) {
+                const parsed = JSON.parse(saved);
+                setPriorities(parsed.priorities ?? [
+                  { id: 1, text: '', completed: false },
+                  { id: 2, text: '', completed: false },
+                  { id: 3, text: '', completed: false }
+                ]);
+                setBraindump(parsed.braindump ?? '');
+                if (Array.isArray(parsed.timeboxes) && parsed.timeboxes.length) {
+                  const gen = generateSlots();
+                  const merged = gen.map(g => {
+                    const found = parsed.timeboxes.find(t => t.id === g.id);
+                    return found ? { ...g, activity: found.activity ?? '', completed: found.completed ?? false } : g;
+                  });
+                  setTimeboxes(merged);
+                } else {
+                  setTimeboxes(generateSlots());
+                }
+              } else {
+                setTimeboxes(generateSlots());
+                setBraindump('');
+              }
+            }
+          } catch (err) {
+            // network error -> fallback to localStorage
+            const saved = localStorage.getItem(`timeboxData_${selectedDate}`);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              setPriorities(parsed.priorities ?? [
+                { id: 1, text: '', completed: false },
+                { id: 2, text: '', completed: false },
+                { id: 3, text: '', completed: false }
+              ]);
+              setBraindump(parsed.braindump ?? '');
+              if (Array.isArray(parsed.timeboxes) && parsed.timeboxes.length) {
+                const gen = generateSlots();
+                const merged = gen.map(g => {
+                  const found = parsed.timeboxes.find(t => t.id === g.id);
+                  return found ? { ...g, activity: found.activity ?? '', completed: found.completed ?? false } : g;
+                });
+                setTimeboxes(merged);
+              } else {
+                setTimeboxes(generateSlots());
+              }
+            } else {
+              setTimeboxes(generateSlots());
+              setBraindump('');
+            }
+          } finally {
+            // slight delay to avoid immediate save override
+            setTimeout(() => { isLoadingRef.current = false; }, 0);
+          }
+        })();
+      }, [selectedDate]);
+
+      // Save to server (debounced). If server fails, save to localStorage as fallback.
+      useEffect(() => {
+        if (isLoadingRef.current) return;
+        if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+        saveDebounceRef.current = setTimeout(async () => {
+          const payload = { priorities, braindump, timeboxes };
+          try {
+            const res = await fetch(`/api/data/${selectedDate}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('Server save failed');
+            setShowSaveIndicator(true);
+            if (indicatorTimeoutRef.current) clearTimeout(indicatorTimeoutRef.current);
+            indicatorTimeoutRef.current = setTimeout(() => setShowSaveIndicator(false), 1400);
+          } catch (err) {
+            // fallback to localStorage
+            try {
+              localStorage.setItem(`timeboxData_${selectedDate}`, JSON.stringify(payload));
+              setShowSaveIndicator(true);
+              if (indicatorTimeoutRef.current) clearTimeout(indicatorTimeoutRef.current);
+              indicatorTimeoutRef.current = setTimeout(() => setShowSaveIndicator(false), 1400);
+            } catch (e) {
+              console.error('Both server and local save failed', e);
+            }
+          }
+        }, 500);
+
+        return () => { if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current); };
+      }, [priorities, braindump, timeboxes, selectedDate]);
+
+      const updatePriority = (id, field, value) => setPriorities(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
+      const updateTimebox = (id, field, value) => setTimeboxes(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
+
+      // Export selected date (server-side if available, else build client blob)
+      const exportSelectedDate = async () => {
+        try {
+          // Try server endpoint first (it will return 404 if not saved on server)
+          const url = `/api/export/${selectedDate}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            // create blob from response stream
+            const blob = await res.blob();
+            const a = document.createElement('a');
+            const u = URL.createObjectURL(blob);
+            a.href = u;
+            a.download = `timebox_${selectedDate}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(u);
+            return;
+          }
+        } catch (e) {
+          // ignore and fallback to client blob
+        }
+        // fallback: build from current state
+        try {
+          const payload = { date: selectedDate, priorities, braindump, timeboxes };
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a');
+          const url = URL.createObjectURL(blob);
+          a.href = url;
+          a.download = `timebox_${selectedDate}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          alert('Export failed — check console');
+          console.error(err);
+        }
+      };
+
+      const exportAllSaved = async () => {
+        try {
+          const url = `/api/export-all`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const blob = await res.blob();
+            const a = document.createElement('a');
+            const u = URL.createObjectURL(blob);
+            a.href = u;
+            a.download = `timebox_all_saved.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(u);
+            return;
+          }
+        } catch (e) {}
+        // fallback: build from localStorage keys
+        try {
+          const all = {};
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('timeboxData_')) {
+              try {
+                all[key.replace('timeboxData_', '')] = JSON.parse(localStorage.getItem(key));
+              } catch (e) {
+                all[key.replace('timeboxData_', '')] = localStorage.getItem(key);
+              }
+            }
+          }
+          const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a');
+          const url = URL.createObjectURL(blob);
+          a.href = url;
+          a.download = `timebox_all_saved.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          alert('Export all failed — check console for details.');
+          console.error(err);
+        }
+      };
+
+      return (
+        <div className="app-container" role="application" aria-label="TimeBox Planner">
+          <div className="top-bar">
+            <h1>⏰ TimeBox Planner</h1>
+            <div className="top-bar-controls">
+              <input
+                aria-label="Select date"
+                title="Select date"
+                className="date-selector"
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
+
+              <button
+                aria-label="Export selected day's data to JSON"
+                title="Export selected date"
+                onClick={exportSelectedDate}
+                className="theme-toggle"
+              >
+                Export Day
+              </button>
+
+              <button
+                aria-label="Export all saved days to JSON"
+                title="Export all saved data"
+                onClick={exportAllSaved}
+                className="theme-toggle"
+              >
+                Export All
+              </button>
+            </div>
+          </div>
+
+          <div className="content-grid" style={{ marginTop: 20 }}>
+            <section className="section" aria-labelledby="priorities-title">
+              <h2 id="priorities-title" className="section-title">📌 Daily Priority Top 3</h2>
+              {priorities.map((p, i) => (
+                <div key={p.id} style={{ display:'flex', gap:10, alignItems:'center', marginBottom:12 }}>
+                  <input
+                    aria-label={`Mark priority ${i+1} complete`}
+                    type="checkbox"
+                    checked={p.completed}
+                    onChange={(e) => updatePriority(p.id, 'completed', e.target.checked)}
+                  />
+                  <input
+                    aria-label={`Priority ${i+1} text`}
+                    className="activity-input"
+                    placeholder={`Priority ${i + 1}`}
+                    value={p.text}
+                    onChange={(e) => updatePriority(p.id, 'text', e.target.value)}
+                  />
+                </div>
+              ))}
+            </section>
+
+            <section className="section" aria-labelledby="braindump-title">
+              <h2 id="braindump-title" className="section-title">📝 Braindump</h2>
+              <textarea
+                aria-label="Braindump area"
+                className="braindump-area"
+                placeholder="Dump all your thoughts, ideas, and todos here..."
+                value={braindump}
+                onChange={(e) => setBraindump(e.target.value)}
+              />
+            </section>
+          </div>
+
+          <section className="timebox-section" aria-labelledby="schedule-title">
+            <h2 id="schedule-title" className="section-title">🕒 Today's Schedule</h2>
+
+            <div className="timebox-list" role="list" aria-label="Time slots list">
+              {timeboxes.map(tb => (
+                <div
+                  role="listitem"
+                  key={tb.id}
+                  className="timebox-row"
+                >
+                  <div style={{ color: 'var(--text-secondary)', fontWeight:500 }}>{tb.time}</div>
+                  <input
+                    aria-label={`Activity at ${tb.time}`}
+                    className="activity-input"
+                    value={tb.activity}
+                    placeholder="Enter activity..."
+                    onChange={(e) => updateTimebox(tb.id, 'activity', e.target.value)}
+                  />
+                  <div style={{ textAlign: 'center' }}>
+                    <input
+                      aria-label={`Mark ${tb.time} as done`}
+                      type="checkbox"
+                      checked={tb.completed}
+                      onChange={(e) => updateTimebox(tb.id, 'completed', e.target.checked)}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {showSaveIndicator && <div className="save-indicator" role="status">Saved</div>}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<TimeBoxPlanner />);
+  </script>
+</body>
+</html>
